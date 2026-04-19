@@ -37,35 +37,57 @@ The content is organized as follows:
 # Directory Structure
 ```
 bot/
+  data/
+    __init__.py
+    fetcher.py
+  features/
+    __init__.py
+    rolling.py
+  strategies/
+    __init__.py
+    zscore.py
+  utils/
+    __init__.py
+    credentials.py
+    logger.py
   __init__.py
   __main__.py
   config.py
-  credentials.py
-  features.py
-  fetcher.py
-  logger.py
   main.py
-  signals.py
 openspec/
   changes/
-    phase-1-signal-bot/
-      specs/
-        bar-fetching/
-          spec.md
-        credential-loading/
-          spec.md
-        dry-run-guard/
-          spec.md
-        feature-computation/
-          spec.md
-        run-logging/
-          spec.md
-        signal-generation/
-          spec.md
-      .openspec.yaml
-      design.md
-      proposal.md
-      tasks.md
+    archive/
+      2026-04-18-phase-1-signal-bot/
+        specs/
+          bar-fetching/
+            spec.md
+          credential-loading/
+            spec.md
+          dry-run-guard/
+            spec.md
+          feature-computation/
+            spec.md
+          run-logging/
+            spec.md
+          signal-generation/
+            spec.md
+        .openspec.yaml
+        design.md
+        proposal.md
+        tasks.md
+  specs/
+    bar-fetching/
+      spec.md
+    credential-loading/
+      spec.md
+    dry-run-guard/
+      spec.md
+    feature-computation/
+      spec.md
+    run-logging/
+      spec.md
+    signal-generation/
+      spec.md
   config.yaml
 .env.example
 .gitignore
@@ -77,80 +99,16 @@ requirements.txt
 
 # Files
 
-## File: bot/__init__.py
+## File: bot/data/__init__.py
 ```python
-
+__all__ = ["fetch_bars"]
 ```
 
-## File: bot/__main__.py
-```python
-
-```
-
-## File: bot/config.py
-```python
-SYMBOL = "BTC/USD"
-BAR_LIMIT = 300          # bars to request; enough to survive warm-up + 100 usable rows
-ROLLING_WINDOW = 20      # bars used for rolling mean / std
-ZSCORE_UPPER = 1.0       # zscore > ZSCORE_UPPER  -> BUY
-ZSCORE_LOWER = -1.0      # zscore < ZSCORE_LOWER  -> SELL
-MIN_BARS_AFTER_FETCH = 150
-MIN_BARS_AFTER_FEATURES = 100
-```
-
-## File: bot/credentials.py
-```python
-def load_credentials() -> tuple[str, str]
-⋮----
-"""Load Alpaca API credentials from environment (with optional .env support).
-
-    Returns:
-        (api_key, secret_key) tuple.
-
-    Raises:
-        EnvironmentError: if either required variable is missing.
-    """
-load_dotenv()  # no-op if .env absent
-⋮----
-required = ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY"]
-missing = [name for name in required if not os.environ.get(name)]
-⋮----
-# Values are read but never logged
-api_key = os.environ["APCA_API_KEY_ID"]
-secret_key = os.environ["APCA_API_SECRET_KEY"]
-```
-
-## File: bot/features.py
-```python
-_FEATURE_COLS = ["rolling_mean", "rolling_std", "zscore", "return"]
-⋮----
-def compute_features(df: pd.DataFrame) -> pd.DataFrame
-⋮----
-"""Add rolling statistics and drop warm-up (NaN) rows.
-
-    Derived columns added:
-        rolling_mean  — rolling mean of close over ROLLING_WINDOW bars
-        rolling_std   — rolling std of close over ROLLING_WINDOW bars
-        zscore        — (close - rolling_mean) / rolling_std
-        return        — bar-over-bar fractional return on close
-
-    Returns:
-        DataFrame with feature columns, NaN warm-up rows removed.
-
-    Raises:
-        ValueError: if fewer than MIN_BARS_AFTER_FEATURES rows remain.
-    """
-df = df.copy()
-⋮----
-# Drop warm-up rows where any feature is undefined
-df = df.dropna(subset=_FEATURE_COLS).reset_index(drop=True)
-```
-
-## File: bot/fetcher.py
+## File: bot/data/fetcher.py
 ```python
 """Fetch recent closed OHLCV bars for *symbol* from Alpaca.
 
-    Uses a start date anchored ``limit`` hours ago so the request returns a
+    Uses a start date anchored ``limit`` minutes ago so the request returns a
     full historical window regardless of account tier. The last
     (still-forming) bar is dropped before returning.
 
@@ -164,8 +122,8 @@ df = df.dropna(subset=_FEATURE_COLS).reset_index(drop=True)
     """
 client = CryptoHistoricalDataClient(api_key=api_key, secret_key=secret_key)
 ⋮----
-# Anchor to limit hours ago so the API returns a full window
-start = datetime.now(tz=timezone.utc) - timedelta(hours=limit + 1)
+# Anchor to limit minutes ago so the API returns a full window
+start = datetime.now(tz=timezone.utc) - timedelta(minutes=limit + 1)
 ⋮----
 request = CryptoBarsRequest(
 bars = client.get_crypto_bars(request)
@@ -191,7 +149,87 @@ df = df.sort_values("timestamp").reset_index(drop=True)
 df = df.iloc[:-1].copy()
 ```
 
-## File: bot/logger.py
+## File: bot/features/__init__.py
+```python
+__all__ = ["compute_features"]
+```
+
+## File: bot/features/rolling.py
+```python
+_FEATURE_COLS = ["rolling_mean", "rolling_std", "zscore", "return"]
+⋮----
+def compute_features(df: pd.DataFrame) -> pd.DataFrame
+⋮----
+"""Add rolling statistics and drop warm-up (NaN) rows.
+
+    Derived columns added:
+        rolling_mean  — rolling mean of close over ROLLING_WINDOW bars
+        rolling_std   — rolling std of close over ROLLING_WINDOW bars
+        zscore        — (close - rolling_mean) / rolling_std
+        return        — bar-over-bar fractional return on close
+
+    Returns:
+        DataFrame with feature columns, NaN warm-up rows removed.
+
+    Raises:
+        ValueError: if fewer than MIN_BARS_AFTER_FEATURES rows remain.
+    """
+df = df.copy()
+⋮----
+# Drop warm-up rows where any feature is undefined
+df = df.dropna(subset=_FEATURE_COLS).reset_index(drop=True)
+```
+
+## File: bot/strategies/__init__.py
+```python
+__all__ = ["generate_signals"]
+```
+
+## File: bot/strategies/zscore.py
+```python
+def generate_signals(df: pd.DataFrame) -> pd.DataFrame
+⋮----
+"""Assign a BUY / SELL / HOLD action signal to each bar.
+
+    Rules (strict inequalities — boundary values map to HOLD):
+        zscore >  ZSCORE_UPPER  -> BUY
+        zscore <  ZSCORE_LOWER  -> SELL
+        otherwise               -> HOLD
+
+    Returns:
+        DataFrame with an additional ``signal`` column (no NaN values).
+    """
+df = df.copy()
+```
+
+## File: bot/utils/__init__.py
+```python
+__all__ = ["load_credentials", "log_bar", "log_run"]
+```
+
+## File: bot/utils/credentials.py
+```python
+def load_credentials() -> tuple[str, str]
+⋮----
+"""Load Alpaca API credentials from environment (with optional .env support).
+
+    Returns:
+        (api_key, secret_key) tuple.
+
+    Raises:
+        EnvironmentError: if either required variable is missing.
+    """
+load_dotenv()  # no-op if .env absent
+⋮----
+required = ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY"]
+missing = [name for name in required if not os.environ.get(name)]
+⋮----
+# Values are read but never logged
+api_key = os.environ["APCA_API_KEY_ID"]
+secret_key = os.environ["APCA_API_SECRET_KEY"]
+```
+
+## File: bot/utils/logger.py
 ```python
 def log_bar(row: pd.Series, dry_run: bool) -> None
 ⋮----
@@ -200,6 +238,27 @@ def log_bar(row: pd.Series, dry_run: bool) -> None
 def log_run(df: pd.DataFrame, dry_run: bool) -> None
 ⋮----
 """Emit one log line per bar in *df*."""
+```
+
+## File: bot/__init__.py
+```python
+
+```
+
+## File: bot/__main__.py
+```python
+
+```
+
+## File: bot/config.py
+```python
+SYMBOL = "BTC/USD"
+BAR_LIMIT = 300          # bars to request; enough to survive warm-up + 100 usable rows
+ROLLING_WINDOW = 20      # bars used for rolling mean / std
+ZSCORE_UPPER = 1.0       # zscore > ZSCORE_UPPER  -> BUY
+ZSCORE_LOWER = -1.0      # zscore < ZSCORE_LOWER  -> SELL
+MIN_BARS_AFTER_FETCH = 150
+MIN_BARS_AFTER_FEATURES = 100
 ```
 
 ## File: bot/main.py
@@ -237,24 +296,7 @@ df = generate_signals(df)
 # Order placement is out of scope for Phase 1 — guard is here for future phases.
 ```
 
-## File: bot/signals.py
-```python
-def generate_signals(df: pd.DataFrame) -> pd.DataFrame
-⋮----
-"""Assign a BUY / SELL / HOLD action signal to each bar.
-
-    Rules (strict inequalities — boundary values map to HOLD):
-        zscore >  ZSCORE_UPPER  -> BUY
-        zscore <  ZSCORE_LOWER  -> SELL
-        otherwise               -> HOLD
-
-    Returns:
-        DataFrame with an additional ``signal`` column (no NaN values).
-    """
-df = df.copy()
-```
-
-## File: openspec/changes/phase-1-signal-bot/specs/bar-fetching/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/bar-fetching/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -313,7 +355,7 @@ After dropping the incomplete bar, the system SHALL validate that at least 150 b
 - **THEN** the system raises an error with a message stating the expected and actual bar count, and exits
 ```
 
-## File: openspec/changes/phase-1-signal-bot/specs/credential-loading/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/credential-loading/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -351,7 +393,7 @@ The system SHALL NOT write API key or secret values to any log output, stdout, o
 - **THEN** the log confirms credentials were loaded (e.g., "Credentials loaded") without printing their values
 ```
 
-## File: openspec/changes/phase-1-signal-bot/specs/dry-run-guard/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/dry-run-guard/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -389,7 +431,7 @@ The system SHALL allow dry-run mode to be explicitly set via a `--dry-run` / `--
 - **THEN** dry-run mode is active
 ```
 
-## File: openspec/changes/phase-1-signal-bot/specs/feature-computation/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/feature-computation/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -441,7 +483,7 @@ All rows where any derived feature column contains NaN SHALL be dropped before s
 - **THEN** the resulting DataFrame contains at least 100 rows; otherwise the system raises an error
 ```
 
-## File: openspec/changes/phase-1-signal-bot/specs/run-logging/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/run-logging/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -482,7 +524,7 @@ When the application runs in dry-run mode, each log line or the startup header S
 - **THEN** log lines do not contain the "DRY-RUN" marker
 ```
 
-## File: openspec/changes/phase-1-signal-bot/specs/signal-generation/spec.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/specs/signal-generation/spec.md
 ```markdown
 ## ADDED Requirements
 
@@ -523,13 +565,13 @@ The signal engine SHALL process a minimum of 100 fully-featured bars without err
 - **THEN** all 100 rows receive a signal value and no errors are raised
 ```
 
-## File: openspec/changes/phase-1-signal-bot/.openspec.yaml
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/.openspec.yaml
 ```yaml
 schema: spec-driven
 created: 2026-04-18
 ```
 
-## File: openspec/changes/phase-1-signal-bot/design.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/design.md
 ```markdown
 ## Context
 
@@ -541,7 +583,7 @@ Greenfield implementation. No existing application code. The Alpaca Python clien
 - Establish a working end-to-end pipeline: credentials → data → features → signal → log
 - Ensure reproducible output for the same input dataset
 - Enforce a hard dry-run execution gate with no order side effects
-- Keep the architecture flat and readable (no over-abstraction for phase 1)
+- Keep the architecture readable with purpose-grouped modules and minimal abstraction
 
 **Non-Goals:**
 - Machine learning, model training, or inference
@@ -609,6 +651,20 @@ Greenfield implementation. No existing application code. The Alpaca Python clien
 
 **Rationale**: Keeps credentials out of source code and config files. Fails fast with a clear error message if either variable is missing.
 
+---
+
+### D7: Organize code by purpose-aligned subpackages
+
+**Chosen**: Group modules into subpackages by responsibility:
+- `bot/data` for data access
+- `bot/features` for feature engineering
+- `bot/strategies` for signal/strategy logic
+- `bot/utils` for credentials and logging helpers
+
+**Rationale**: Improves maintainability as strategy and feature count grows while keeping the Phase 1 flow simple and deterministic.
+
+**Alternative considered**: Keep all modules flat in `bot/` — rejected because it scales poorly for upcoming multi-strategy and ML phases.
+
 ## Risks / Trade-offs
 
 - **Fewer than 100 usable bars after warm-up** → Mitigation: validate bar count after dropping incomplete bar and warm-up rows, raise explicit error if count < 100.
@@ -618,7 +674,7 @@ Greenfield implementation. No existing application code. The Alpaca Python clien
 - **Float formatting drift in logs** → Mitigation: fix decimal precision for logged fields in the run-logging spec.
 ```
 
-## File: openspec/changes/phase-1-signal-bot/proposal.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/proposal.md
 ```markdown
 ## Why
 
@@ -655,7 +711,7 @@ Alpaca supports crypto trading via a Python client but lacks any tooling for sys
 - **No ML, multi-symbol, portfolio, or deployment concerns** in this phase
 ```
 
-## File: openspec/changes/phase-1-signal-bot/tasks.md
+## File: openspec/changes/archive/2026-04-18-phase-1-signal-bot/tasks.md
 ```markdown
 ## 1. Project Setup
 
@@ -725,6 +781,284 @@ Alpaca supports crypto trading via a Python client but lacks any tooling for sys
 - [x] 9.3 Run signal generation on at least 100 bars and confirm no errors
 - [x] 9.4 Run twice on the same fetched dataset (saved to CSV) and confirm identical output
 - [x] 9.5 Run in dry-run mode and confirm no orders appear in Alpaca paper account activity
+
+## 10. Package Organization Refactor
+
+- [x] 10.1 Group modules by purpose into `bot/data`, `bot/features`, `bot/strategies`, and `bot/utils`
+- [x] 10.2 Move data fetch logic to `bot/data/fetcher.py`
+- [x] 10.3 Move feature computation logic to `bot/features/rolling.py`
+- [x] 10.4 Move signal generation logic to `bot/strategies/zscore.py`
+- [x] 10.5 Move credentials and logging logic to `bot/utils/credentials.py` and `bot/utils/logger.py`
+- [x] 10.6 Update imports and entrypoints to use the new package structure
+```
+
+## File: openspec/specs/bar-fetching/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Fetch OHLCV bars for BTC/USD
+The system SHALL fetch historical OHLCV bars for the BTC/USD symbol from the Alpaca crypto data API.
+
+#### Scenario: Successful fetch
+- **WHEN** valid credentials are configured and the Alpaca API is reachable
+- **THEN** the system returns a non-empty collection of bars for BTC/USD
+
+#### Scenario: Configurable bar count
+- **WHEN** a bar limit is specified (default: 200)
+- **THEN** the system requests at least that many bars to ensure at least 100 remain after preprocessing
+
+### Requirement: Normalize bars into a pandas DataFrame
+The system SHALL convert the raw Alpaca response into a pandas DataFrame with the following columns: `timestamp`, `open`, `high`, `low`, `close`, `volume`.
+
+#### Scenario: Column contract
+- **WHEN** the fetch response is normalized
+- **THEN** the resulting DataFrame contains exactly the columns: timestamp, open, high, low, close, volume with no extra undocumented columns
+
+#### Scenario: Numeric column types
+- **WHEN** the DataFrame is constructed
+- **THEN** open, high, low, close, and volume columns are cast to float64
+
+### Requirement: Timestamps normalized to UTC
+All bar timestamps SHALL be stored as timezone-aware UTC datetime values.
+
+#### Scenario: UTC normalization
+- **WHEN** bars are received from Alpaca
+- **THEN** all timestamp values in the DataFrame are UTC-aware and consistent
+
+### Requirement: Bars sorted ascending by timestamp
+The system SHALL sort the DataFrame by timestamp in ascending order after fetch, regardless of API response ordering.
+
+#### Scenario: Sort enforcement
+- **WHEN** bars are fetched and placed into a DataFrame
+- **THEN** the rows are ordered from oldest to newest timestamp
+
+### Requirement: Exclude the last incomplete bar
+The system SHALL drop the most recent bar from the DataFrame before any feature computation.
+
+#### Scenario: Last bar removed
+- **WHEN** the normalized DataFrame is prepared for feature computation
+- **THEN** the final row (highest timestamp) is removed so only closed bars are processed
+
+### Requirement: Minimum bar count validation
+After dropping the incomplete bar, the system SHALL validate that at least 150 bars remain to allow warm-up rows plus 100 fully-computed rows.
+
+#### Scenario: Sufficient bars
+- **WHEN** the cleaned DataFrame contains 150 or more rows
+- **THEN** processing continues normally
+
+#### Scenario: Insufficient bars
+- **WHEN** the cleaned DataFrame contains fewer than 150 rows
+- **THEN** the system raises an error with a message stating the expected and actual bar count, and exits
+```
+
+## File: openspec/specs/credential-loading/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Load API credentials from environment
+The system SHALL load `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` from the process environment before making any Alpaca API calls.
+
+#### Scenario: Both credentials present
+- **WHEN** both `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` are set in the environment
+- **THEN** the system reads their values and proceeds without error
+
+#### Scenario: API key missing
+- **WHEN** `APCA_API_KEY_ID` is not set in the environment
+- **THEN** the system raises an error with a message identifying the missing variable and exits before making any API call
+
+#### Scenario: API secret missing
+- **WHEN** `APCA_API_SECRET_KEY` is not set in the environment
+- **THEN** the system raises an error with a message identifying the missing variable and exits before making any API call
+
+### Requirement: Support .env file for local development
+The system SHALL attempt to load a `.env` file from the working directory before reading environment variables, allowing local development without exporting credentials in the shell.
+
+#### Scenario: .env file present
+- **WHEN** a `.env` file exists in the working directory containing credential variables
+- **THEN** those variables are loaded into the environment and used for the API client
+
+#### Scenario: .env file absent
+- **WHEN** no `.env` file exists
+- **THEN** the system silently continues, relying on already-set environment variables
+
+### Requirement: Credentials never logged
+The system SHALL NOT write API key or secret values to any log output, stdout, or stderr at any log level.
+
+#### Scenario: Startup log
+- **WHEN** the application starts and credentials are loaded
+- **THEN** the log confirms credentials were loaded (e.g., "Credentials loaded") without printing their values
+```
+
+## File: openspec/specs/dry-run-guard/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Dry-run mode prevents order placement
+When dry-run mode is enabled, the system SHALL NOT call any Alpaca order placement endpoint under any circumstance.
+
+#### Scenario: Signal triggers no order in dry-run
+- **WHEN** dry-run mode is enabled and a BUY or SELL signal is generated
+- **THEN** no order is submitted to Alpaca and no order-related API call is made
+
+#### Scenario: Signal logs intent in dry-run
+- **WHEN** dry-run mode is enabled and a BUY or SELL signal is generated
+- **THEN** the system logs that it would place an order but does not do so
+
+### Requirement: Dry-run mode is enabled by default
+The system SHALL default to dry-run mode so that accidental live execution is not possible without an explicit opt-in.
+
+#### Scenario: Default behavior
+- **WHEN** the application is run without any execution mode flag
+- **THEN** dry-run mode is active and no orders can be placed
+
+### Requirement: Dry-run mode is configurable via CLI flag or environment variable
+The system SHALL allow dry-run mode to be explicitly set via a `--dry-run` / `--live` CLI flag or a `DRY_RUN` environment variable.
+
+#### Scenario: Explicit dry-run flag
+- **WHEN** the application is started with `--dry-run`
+- **THEN** dry-run mode is active regardless of the environment variable value
+
+#### Scenario: Explicit live flag
+- **WHEN** the application is started with `--live`
+- **THEN** dry-run mode is disabled (live execution mode is active)
+
+#### Scenario: Environment variable override
+- **WHEN** `DRY_RUN=true` is set in the environment and no CLI flag is given
+- **THEN** dry-run mode is active
+```
+
+## File: openspec/specs/feature-computation/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Compute rolling mean on close price
+The system SHALL compute a rolling arithmetic mean of the `close` column over a fixed configurable window (default: 20 bars).
+
+#### Scenario: Rolling mean computed
+- **WHEN** feature computation runs on the DataFrame
+- **THEN** a `rolling_mean` column is present containing the rolling mean for each row
+
+### Requirement: Compute rolling standard deviation on close price
+The system SHALL compute a rolling standard deviation of the `close` column over the same window as the rolling mean.
+
+#### Scenario: Rolling std computed
+- **WHEN** feature computation runs on the DataFrame
+- **THEN** a `rolling_std` column is present containing the rolling std for each row
+
+### Requirement: Compute z-score from rolling statistics
+The system SHALL compute a z-score for each bar as `(close - rolling_mean) / rolling_std`.
+
+#### Scenario: Z-score computed
+- **WHEN** rolling_mean and rolling_std are available for a row
+- **THEN** the `zscore` column equals `(close - rolling_mean) / rolling_std`
+
+#### Scenario: Z-score undefined during warm-up
+- **WHEN** the rolling window has not yet accumulated enough bars (first N-1 rows)
+- **THEN** the `zscore` column contains NaN for those rows
+
+### Requirement: Compute bar-over-bar returns
+The system SHALL compute the percentage return for each bar as `(close - prev_close) / prev_close`.
+
+#### Scenario: Return computed
+- **WHEN** a prior bar exists
+- **THEN** the `return` column contains the fractional price change from the previous close
+
+#### Scenario: First bar return
+- **WHEN** there is no prior bar
+- **THEN** the `return` column contains NaN for the first row
+
+### Requirement: Drop warm-up rows before signal generation
+All rows where any derived feature column contains NaN SHALL be dropped before signal generation begins.
+
+#### Scenario: Warm-up rows removed
+- **WHEN** feature computation is complete
+- **THEN** the DataFrame passed to signal generation contains no NaN values in feature columns
+
+#### Scenario: Minimum viable rows
+- **WHEN** warm-up rows are dropped
+- **THEN** the resulting DataFrame contains at least 100 rows; otherwise the system raises an error
+```
+
+## File: openspec/specs/run-logging/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Emit one log line per processed bar
+The system SHALL emit exactly one plain-text log line for each bar that has a computed signal.
+
+#### Scenario: One line per bar
+- **WHEN** signal generation completes for N bars
+- **THEN** exactly N log lines are emitted to stdout (or the configured output stream)
+
+### Requirement: Log line contains required fields
+Each log line SHALL include the following fields in a fixed order: timestamp, close price, signal, zscore, rolling_mean, rolling_std.
+
+#### Scenario: Field presence
+- **WHEN** a log line is emitted
+- **THEN** it contains timestamp, close, signal, zscore, rolling_mean, and rolling_std values
+
+### Requirement: Consistent decimal precision in log output
+Numeric values in log lines SHALL be formatted with fixed decimal precision to ensure consistent output across runs.
+
+#### Scenario: Price precision
+- **WHEN** close, rolling_mean, and rolling_std are logged
+- **THEN** they are formatted to 2 decimal places
+
+#### Scenario: Z-score precision
+- **WHEN** zscore is logged
+- **THEN** it is formatted to 4 decimal places
+
+### Requirement: Dry-run mode is marked in log output
+When the application runs in dry-run mode, each log line or the startup header SHALL include a visible DRY-RUN marker.
+
+#### Scenario: Dry-run marker present
+- **WHEN** dry-run mode is active and a log line is emitted
+- **THEN** the line or the preceding startup line contains the text "DRY-RUN"
+
+#### Scenario: No marker in live mode
+- **WHEN** dry-run mode is not active
+- **THEN** log lines do not contain the "DRY-RUN" marker
+```
+
+## File: openspec/specs/signal-generation/spec.md
+```markdown
+## ADDED Requirements
+
+### Requirement: Generate BUY/SELL/HOLD action signals
+The system SHALL assign an action signal to each bar based on its z-score value. The signal vocabulary is BUY, SELL, and HOLD.
+
+#### Scenario: BUY signal
+- **WHEN** a bar's `zscore` is strictly greater than the upper threshold (default: 1.0)
+- **THEN** the signal for that bar is BUY
+
+#### Scenario: SELL signal
+- **WHEN** a bar's `zscore` is strictly less than the lower threshold (default: -1.0)
+- **THEN** the signal for that bar is SELL
+
+#### Scenario: HOLD signal
+- **WHEN** a bar's `zscore` is greater than or equal to the lower threshold and less than or equal to the upper threshold
+- **THEN** the signal for that bar is HOLD
+
+### Requirement: Signal thresholds are configurable
+Upper and lower z-score thresholds SHALL be defined in a fixed configuration location (e.g., config file or constants module) so they can be changed without modifying signal logic.
+
+#### Scenario: Threshold change
+- **WHEN** the upper threshold is changed from 1.0 to 1.5 in the config
+- **THEN** BUY signals are only generated for z-scores above 1.5 with no code changes in the signal function
+
+### Requirement: Signal generation is deterministic
+Given identical input feature values, the system SHALL always produce the same signal output.
+
+#### Scenario: Reproducibility
+- **WHEN** the same DataFrame with the same feature values is passed to signal generation twice
+- **THEN** the `signal` column produced is identical in both runs
+
+### Requirement: Signal generation handles at least 100 bars
+The signal engine SHALL process a minimum of 100 fully-featured bars without error.
+
+#### Scenario: 100-bar run
+- **WHEN** a DataFrame with exactly 100 rows of complete features is passed to signal generation
+- **THEN** all 100 rows receive a signal value and no errors are raised
 ```
 
 ## File: openspec/config.yaml
@@ -763,6 +1097,8 @@ APCA_API_SECRET_KEY=your_secret_key_here
 ```
 *.vscode/*
 *.env
+*.pyc
+__pycache__/
 ```
 
 ## File: .repomixignore
@@ -798,15 +1134,15 @@ LICENSE
 
 ```
 
+## File: README.md
+```markdown
+# alapac-ml-crypto-project
+Alpaca crypto trading toy project
+```
+
 ## File: requirements.txt
 ```
 alpaca-py
 pandas
 python-dotenv
-```
-
-## File: README.md
-```markdown
-# alapac-ml-crypto-project
-Alpaca crypto trading toy project
 ```
